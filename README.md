@@ -50,6 +50,14 @@ node build-client.mjs   # src/client/client.js → lib/client.js（__ModuleLoade
 | 4 | 归档后历史归档面板不立即显示新记录（要刷新页面） | 面板每次打开时重新拉取 `list` |
 | 5 | 面板保持打开时归档/恢复不刷新 | 面板打开状态下每 3 秒轮询（DOM 移除后自动停止） |
 
+## 反馈与贡献
+
+欢迎提 issue 或 PR：
+
+- 发现 bug（包括上面的修复是否有副作用）、想要新功能，直接开 [issue](https://github.com/LianbinZhou/dsh-archive-manager/issues)
+- 本仓库已包含完整修复；如果插件原作者发布了新版本，欢迎把本仓库的修复合并过去
+- 安装/使用问题也可以在 issue 里提问
+
 ## 许可
 
 MIT。上游为本地安装的 `dsh-archive-manager` v0.1.0（MIT），原作者未在包内署名；本仓库为修复维护版。
