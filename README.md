@@ -3,7 +3,7 @@
 DSH Web GUI 的「历史归档」管理插件：侧边栏新增「历史归档」入口，列出已归档的会话并支持一键恢复回工作区。
 
 - 侧边栏「历史归档」入口（跟随 DSH 侧边栏样式）
-- 面板列出所有归档会话（显示真实会话标题）
+- 面板列出所有归档会话（显示真实会话标题 + 归档时间）
 - 每条记录一个「恢复」按钮，一键取消归档、回到工作区列表
 - 面板打开时自动刷新 + 打开状态下每 3 秒轮询，归档/恢复无需刷新页面
 
@@ -36,7 +36,9 @@ dsh plugin --profile web ...
 node build-client.mjs   # src/client/client.js → lib/client.js（__ModuleLoader__ 包装）
 ```
 
-验证：`node host-test.mjs`、`node loader-test.mjs`、`node _precheck.mjs`
+验证：`node host-test.mjs`、`node loader-test.mjs`、`node _precheck.mjs`、`node title-test.mjs`
+
+`title-test.mjs` 是标题解析的离线测试（vm + 桩服务，不需要启动 dsh），覆盖批量接口命中、单条失败回退原始日志、无 sessionQuery 时整批回退、取最新一条 `session/title`、缓存与并发去重。
 
 ## 修复记录
 
@@ -49,6 +51,7 @@ node build-client.mjs   # src/client/client.js → lib/client.js（__ModuleLoade
 | 3 | 归档列表只显示「会话+随机后缀」，看不到真实标题 | `list` 接口通过 `sessionPersistence.inspect` 读取会话日志中的 `session/title` 事件，返回 `items: [{sessionId, title}]`；客户端优先渲染真实标题 |
 | 4 | 归档后历史归档面板不立即显示新记录（要刷新页面） | 面板每次打开时重新拉取 `list` |
 | 5 | 面板保持打开时归档/恢复不刷新 | 面板打开状态下每 3 秒轮询（DOM 移除后自动停止） |
+| 6 | DSH 升级到 0.1.5 后归档列表又只剩「未取到标题 · id 尾号」：官方已删除 `sessionPersistence.inspect()`，旧调用静默返回 undefined | `list` 改走当前官方读法 `sessionQuery.readTitleSnapshots(ids)`（一次列出全部、折叠最新 `session/title`），并保留 `sessionPersistence.open(id, 'read')` + 日志折叠作为回退；标题按会话缓存（无标题的 30 秒后重试），避免面板轮询反复解压会话日志 |
 
 ## 反馈与贡献
 

@@ -124,7 +124,7 @@ function conversationColumn() {
 /** Short label for an archived session: title or id tail. */
 function labelFor(meta) {
 	if (meta?.title && meta.title.length > 0) return meta.title;
-	if (typeof meta?.sessionId === "string") return `会话 ${meta.sessionId.slice(-8)}`;
+	if (typeof meta?.sessionId === "string") return `未取到标题 · ${meta.sessionId.slice(-8)}`;
 	return "未命名会话";
 }
 
@@ -259,6 +259,9 @@ function renderPlain(container, controller) {
 				label.className = "dsham-itemTitle";
 				label.textContent = labelFor(item);
 				label.title = id;
+				const time = document.createElement("span");
+				time.className = "dsham-itemTime";
+				time.textContent = timeLabel(item.updatedAt);
 				const btn = document.createElement("button");
 				btn.type = "button";
 				btn.className = "dsham-restore";
@@ -288,6 +291,7 @@ function renderPlain(container, controller) {
 					}
 				});
 				row.appendChild(label);
+				if (time.textContent !== "") row.appendChild(time);
 				row.appendChild(btn);
 				listEl.appendChild(row);
 			}
