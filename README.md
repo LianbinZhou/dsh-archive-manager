@@ -1,18 +1,38 @@
 # dsh-archive-manager
 
-DSH Web GUI 的「历史归档」管理插件：侧边栏新增「历史归档」入口，列出已归档的会话并支持一键恢复回工作区。
+DSH Web GUI 的「历史归档」管理插件：侧边栏新增「历史归档」入口，列出已归档的会话，支持一键恢复回工作区，以及**带二次确认的物理删除**。
 
 - 侧边栏「历史归档」入口（跟随 DSH 侧边栏样式）
 - 面板列出所有归档会话（显示真实会话标题 + 归档时间）
 - 每条记录一个「恢复」按钮，一键取消归档、回到工作区列表
-- 面板打开时自动刷新 + 打开状态下每 3 秒轮询，归档/恢复无需刷新页面
+- 每条记录一个「删除」按钮，二次确认后彻底删除会话（不可恢复）
+- 面板打开时自动刷新 + 打开状态下每 3 秒轮询，归档/恢复/删除无需刷新页面
 
 ## 背景
 
-DSH 官方提供「归档会话」（`workspace.archiveSession`），但**没有恢复（unarchive）入口**——归档后的会话会从工作区列表隐藏，官方没有任何界面能把它放回来。本插件补上这个缺口：
+DSH 官方提供「归档会话」（`workspace.archiveSession`），但**既没有恢复（unarchive）入口，也没有物理删除入口**——归档后的会话会从工作区列表隐藏，官方没有任何界面能把它放回来，更没有办法真正删掉它。本插件补上这两个缺口：
 
-- 宿主端注册 `/api/archive-manager/list` 与 `/api/archive-manager/unarchive`
+- 宿主端注册 `/api/archive-manager/list`、`/api/archive-manager/unarchive`、`/api/archive-manager/delete`
 - 客户端注入侧边栏入口 + 面板
+
+## 删除的语义与安全边界
+
+**物理删除不可恢复。** 插件按下面的顺序执行，任一步失败都不会留下"半删除"的会话：
+
+1. **归档标记**：从 workspace 存储域的 `archivedSessionIds` 中移除（复用恢复的写入路径，侧边栏与已连接的浏览器立即同步）
+2. **工作区记录**：从每个工作区实体的 `sessionIds` 名册中移除（尽力而为，失败不阻塞后续步骤）
+3. **存储目录**：删除 `$DSH_HOME/sessions/<project>/<session-id>/`（含 `session.v3.jsonl.zstd`）
+4. **投影缓存**：清理 `storages/session_projcache.json` 的索引行，以及该会话的逐会话缓存文件
+
+安全约束：
+
+- **只有已归档的会话能被删除。** 正在使用的会话在归档之前不可达，误发或重放的请求也删不掉它。
+- 删除前对路径做 **realpath 二次校验**，拒绝任何位于 `$DSH_HOME/sessions` 之外的路径。
+- **不跟随逃逸符号链接**：指向 sessions 根之外的链接既不会被索引，也不会被删除。
+- 会话 id 先做格式校验（拒绝 `..`、路径分隔符、超长输入）才触碰文件系统。
+- 客户端只提交会话 ID，从不提交文件路径。
+
+**共享的内容寻址附件（`$DSH_HOME/attachments`）不会被回收**：它们可能被其他会话引用，孤儿附件清理不在本插件职责内。
 
 ## 安装
 
@@ -30,19 +50,22 @@ pnpm add dsh-archive-manager  # 需要包已发布到 npm 或指向 git 仓库
 dsh plugin --profile web ...
 ```
 
-## 构建（修改客户端源码后）
+## 构建与测试
 
 ```bash
-node build-client.mjs   # src/client/client.js → lib/client.js（__ModuleLoader__ 包装）
+node build.mjs          # 一次构建：src/host/*.js → lib/*.js，src/client/client.js → lib/client.js
+node delete-test.mjs    # 删除路径的安全测试（24 项：路径逃逸、符号链接逃逸、缓存清理、损坏容错）
 ```
 
-验证：`node host-test.mjs`、`node loader-test.mjs`、`node _precheck.mjs`、`node title-test.mjs`
+只想重建客户端产物时可以用 `node build-client.mjs`（等价于 `build.mjs` 的后半段）。
+
+其它验证：`node host-test.mjs`、`node loader-test.mjs`、`node _precheck.mjs`、`node title-test.mjs`
 
 `title-test.mjs` 是标题解析的离线测试（vm + 桩服务，不需要启动 dsh），覆盖批量接口命中、单条失败回退原始日志、无 sessionQuery 时整批回退、取最新一条 `session/title`、缓存与并发去重。
 
-## 修复记录
+## 修复与新增记录
 
-本仓库基于本地安装的 dsh-archive-manager v0.1.0 维护，修复了以下问题（`lib/` 与 `src/` 已同步）：
+本仓库基于本地安装的 dsh-archive-manager v0.1.0 维护（`lib/` 与 `src/` 已同步）：
 
 | # | 问题 | 修复 |
 |---|---|---|
@@ -52,6 +75,7 @@ node build-client.mjs   # src/client/client.js → lib/client.js（__ModuleLoade
 | 4 | 归档后历史归档面板不立即显示新记录（要刷新页面） | 面板每次打开时重新拉取 `list` |
 | 5 | 面板保持打开时归档/恢复不刷新 | 面板打开状态下每 3 秒轮询（DOM 移除后自动停止） |
 | 6 | DSH 升级到 0.1.5 后归档列表又只剩「未取到标题 · id 尾号」：官方已删除 `sessionPersistence.inspect()`，旧调用静默返回 undefined | `list` 改走当前官方读法 `sessionQuery.readTitleSnapshots(ids)`（一次列出全部、折叠最新 `session/title`），并保留 `sessionPersistence.open(id, 'read')` + 日志折叠作为回退；标题按会话缓存（无标题的 30 秒后重试），避免面板轮询反复解压会话日志 |
+| 7 | **官方没有物理删除入口**：会话被归档后只能一直躺在磁盘上，占空间且无法清理 | **v0.2.0 新增「删除」**：二次确认 + 四步清理管线（归档标记 → 工作区记录 → 存储目录 → 投影缓存），realpath 校验路径、拒绝逃逸符号链接、仅允许删除已归档会话；纯逻辑抽到 `src/host/paths.js` 并由 `delete-test.mjs` 覆盖 |
 
 ## 反馈与贡献
 

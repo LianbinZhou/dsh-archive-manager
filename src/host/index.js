@@ -1,8 +1,9 @@
 /**
  * dsh-archive-manager — host (backend) half.
  *
- * Teaches the dsh web GUI a feature the official build does not ship:
- * un-archiving (restoring) a session back into the workspace list.
+ * Teaches the dsh web GUI two features the official build does not ship:
+ * un-archiving (restoring) a session back into the workspace list, and
+ * physically deleting an archived session for good.
  *
  * How it works:
  *   1. The official `workspaceRegistry` service exposes `archivedSessionIds`
@@ -13,12 +14,20 @@
  *      reloads on next boot, AND the registry's in-memory state is updated
  *      through its own write path where possible.
  *   2. It registers its own HTTP routes under /api/archive-manager/* so the
- *      browser half can list archived sessions and restore one.
+ *      browser half can list archived sessions, restore one, or delete one.
+ *   3. Physical delete has no official API (the persistence service only
+ *      creates, opens, reads and lists), so the host half removes a session
+ *      the way the ecosystem does: archive markers -> workspace rows -> the
+ *      storage directory under `$DSH_HOME/sessions` -> the projection cache.
+ *      Every path is re-validated against the sessions root by realpath
+ *      immediately before removal, and only a session that is already
+ *      archived is ever reachable through the delete route.
  */
 
 import { Service } from "@deepseek-ai/cordis";
 import z from "schemastery";
 import { workspaceDomainSpec } from "@deepseek-ai/dsh-workspace";
+import { canonicalSessionId, dshHome, findSessionDir, isSafeSessionId, removeSessionDir, scrubProjcache } from "./paths.js";
 
 /** Stable plugin row name used in cordis.patch.yml. */
 const name = "archive-manager";
@@ -321,6 +330,95 @@ class ArchiveManagerService extends Service {
 		}
 		return { ok: true, archivedSessionIds: next };
 	}
+
+	/**
+	 * Remove one session id from every workspace entity's durable roster.
+	 * Durable row updates flow through the entity `mutate` path so the
+	 * workspace feed upserts its record like any other edit. Best-effort: a
+	 * failure here is cosmetic (the projection already drops ids whose stored
+	 * header is gone), so it never blocks the storage removal.
+	 * @param sessionId - session whose roster entry is dropped.
+	 */
+	async _dropWorkspaceRows(sessionId) {
+		const registry = this.ctx.workspaceRegistry;
+		if (registry === void 0 || typeof registry.list !== "function") return;
+		const drop = canonicalSessionId(sessionId);
+		let entities;
+		try {
+			entities = registry.list();
+		} catch {
+			return;
+		}
+		for (const entity of entities ?? []) {
+			if (entity === null || entity === void 0 || typeof entity.mutate !== "function") continue;
+			const ids = Array.isArray(entity.sessionIds) ? entity.sessionIds : [];
+			if (!ids.some((id) => canonicalSessionId(String(id)) === drop)) continue;
+			try {
+				await entity.mutate((record) => ({
+					...record,
+					sessionIds: (record.sessionIds ?? []).filter((id) => canonicalSessionId(String(id)) !== drop)
+				}));
+			} catch {
+				// Best-effort, by contract: the row is cosmetic once storage is gone.
+			}
+		}
+	}
+
+	/**
+	 * Physically delete one session, in the crash-safe order: archive markers,
+	 * then workspace rows, then the storage directory, then the projection
+	 * cache. A crash between steps leaves the session unlisted but present, so
+	 * a retry finishes the job — it never leaves a half-deleted session behind.
+	 *
+	 * Safety boundary: only a session that is ALREADY ARCHIVED can be deleted
+	 * here. A session in active use is unreachable through this route, so a
+	 * mistyped or replayed request can never destroy a live conversation.
+	 * @param sessionId - session to delete.
+	 * @returns per-request result; `ok: false` carries a user-facing reason.
+	 */
+	async delete(sessionId) {
+		if (!isSafeSessionId(sessionId)) {
+			return { ok: false, error: "invalid sessionId" };
+		}
+		const domain = await this._domain();
+		const archived = domain.global.get()?.archivedSessionIds ?? [];
+		const canonical = canonicalSessionId(sessionId);
+		if (!archived.some((id) => canonicalSessionId(String(id)) === canonical)) {
+			return { ok: false, error: "只能删除已归档的会话（请先归档，再删除）" };
+		}
+
+		const home = dshHome();
+		const sessionsRoot = join(home, "sessions");
+
+		// 1. Archive markers — reuse the restore write path, so the sidebar and
+		//    every connected browser learn about the change without a reload.
+		const restored = await this.unarchive(sessionId);
+
+		// 2. Workspace rows (best-effort; never blocks the storage removal).
+		await this._dropWorkspaceRows(sessionId);
+
+		// 3. Storage directory.
+		let removedDir = false;
+		try {
+			const dir = findSessionDir(sessionsRoot, sessionId);
+			if (dir !== void 0) {
+				removeSessionDir(dir, sessionsRoot);
+				removedDir = true;
+			}
+		} catch (error) {
+			return {
+				ok: false,
+				error: `删除会话文件失败：${String(error?.message ?? error)}`,
+				archivedSessionIds: restored.archivedSessionIds
+			};
+		}
+
+		// 4. Projection cache, then our own title cache.
+		scrubProjcache(home, [sessionId]);
+		this._titleCache.delete(sessionId);
+
+		return { ok: true, removedDir, archivedSessionIds: restored.archivedSessionIds };
+	}
 }
 
 /** Register the plugin: routes. */
@@ -368,6 +466,30 @@ function apply(ctx, config) {
 					sendJson(res, 500, { error: String(error?.message ?? error) });
 				}
 			}
+		},
+		{
+			kind: "exact",
+			path: `${ROUTE_PREFIX}/delete`,
+			handler: async (req, res) => {
+				if (req.method !== "POST") {
+					sendJson(res, 405, { error: "method not allowed" });
+					return;
+				}
+				try {
+					const body = await readBody(req);
+					const sessionId = typeof body?.sessionId === "string" ? body.sessionId : null;
+					if (sessionId === null || sessionId.length === 0) {
+						sendJson(res, 400, { error: "missing sessionId" });
+						return;
+					}
+					const result = await service.delete(sessionId);
+					// A refused delete is a valid answer, not a transport error:
+					// 400 carries the user-facing reason the panel renders.
+					sendJson(res, result.ok === true ? 200 : 400, result);
+				} catch (error) {
+					sendJson(res, 500, { error: String(error?.message ?? error) });
+				}
+			}
 		}
 	];
 
@@ -379,4 +501,10 @@ function apply(ctx, config) {
 	}, "archive-manager: routes");
 }
 
-export { ArchiveManagerService, Config, apply, inject, name }; 
+export { ArchiveManagerService, Config, apply, inject, name };
+/**
+ * Path/validation helpers exposed for the test suite. They are pure functions
+ * over the filesystem and carry the delete route's safety guarantees, so the
+ * suite can pin them without standing up a full DSH composition.
+ */
+export { canonicalSessionId, dshHome, findSessionDir, isInside, isSafeSessionId, removeSessionDir, scrubProjcache } from "./paths.js"; 
