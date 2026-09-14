@@ -29,6 +29,16 @@ function dshHome() {
 }
 
 /**
+ * Absolute `<dshHome>/sessions` root — the one directory tree the delete path
+ * is allowed to touch, and the containment boundary every removal checks.
+ * @param home - absolute harness home.
+ * @returns the absolute sessions root path.
+ */
+function sessionsRootFor(home) {
+	return join(home, "sessions");
+}
+
+/**
  * Canonical session id. DSH keys a session's storage segment off the id: a
  * `session-<uuid>` id may land as segment `<uuid>`, and the archive set mixes
  * both spellings, so every comparison goes through this normal form.
@@ -172,5 +182,5 @@ function scrubProjcache(home, ids) {
 	}
 }
 
-export { canonicalSessionId, dshHome, findSessionDir, isInside, isSafeSessionId, removeSessionDir, scrubProjcache };
+export { canonicalSessionId, dshHome, findSessionDir, isInside, isSafeSessionId, removeSessionDir, scrubProjcache, sessionsRootFor };
 

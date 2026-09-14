@@ -152,6 +152,37 @@ try {
 }
 check("损坏的投影索引被安全忽略", corruptThrew, false);
 
+// 10. Refactor guard: the host entry must never call a node: builtin it no
+//     longer imports. A missing import only surfaces at request time — the
+//     delete route once answered 500 "join is not defined" exactly this way —
+//     so the invariant is pinned statically here.
+const indexSource = readFileSync(new URL("./src/host/index.js", import.meta.url), "utf8");
+const importedBuiltins = new Set();
+for (const match of indexSource.matchAll(/import \{([^}]+)\} from "node:[^"]+"/g)) {
+	for (const piece of match[1].split(",")) importedBuiltins.add(piece.trim());
+}
+const builtins = [
+	"join",
+	"resolve",
+	"sep",
+	"existsSync",
+	"readFileSync",
+	"writeFileSync",
+	"unlinkSync",
+	"readdirSync",
+	"realpathSync",
+	"rmSync",
+	"statSync",
+	"homedir",
+	"isAbsolute"
+];
+// `(?<![.\w$])` skips property access (Promise.resolve) and identifiers that
+// merely start with the same text (resolveBody).
+const leaked = builtins.filter(
+	(name) => !importedBuiltins.has(name) && new RegExp(`(?<![.\\w$])${name}\\s*\\(`).test(indexSource)
+);
+check("index.js 未调用未导入的 node 内置", leaked, []);
+
 rmSync(home, { recursive: true, force: true });
 
 lines.push("");
