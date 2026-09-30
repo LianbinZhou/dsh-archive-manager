@@ -185,20 +185,40 @@ function mountPanel(controller) {
 	const onOtherActivate = (event) => {
 		if (event.detail === "ssh" || event.detail === "taskboard") controller.close();
 	};
-	const SIDEBAR_ROW_SELECTOR = "[class*=\"sessionRow\"], [class*=\"projectRow\"], [class*=\"searchResultRow\"], [class*=\"searchResultWorkspace\"], [class*=\"newSession\"]";
-	const onClickSidebarRow = (event) => {
+	const OUR_ENTRY_SELECTOR = "[data-dsh-archive-entry]";
+	const OUR_VIEW_SELECTOR = "[data-dsh-archive-view]";
+	/**
+	 * Close when the click is aimed at anything that is not our own UI.
+	 *
+	 * Sibling panels are deliberately NOT enumerated by name. The previous
+	 * version listed `ssh` and `taskboard` (their activate events and their
+	 * `data-dsh-*-active` attributes), which only works for that exact plugin
+	 * set: any other third-party panel — or any official panel that does not
+	 * emit our custom activate event, e.g. the built-in Plugins / Skills
+	 * panels — left this panel open. Because the open state hides every other
+	 * child of the center column, those buttons then looked dead until the
+	 * user happened to click a session row.
+	 *
+	 * Clicking inside our own entry or our own panel keeps it open; every
+	 * other click yields. That covers session rows, project rows, search
+	 * results, the new-session row, panel icons (ours or anyone else's), and
+	 * keyboard-driven surfaces alike, without knowing a single plugin name.
+	 */
+	const onDocumentClick = (event) => {
 		if (!controller.getSnapshot().open) return;
 		const target = event.target;
-		if (target === null) return;
-		if (target.closest(SIDEBAR_ROW_SELECTOR) !== null) controller.close();
+		if (target === null || typeof target.closest !== "function") return;
+		if (target.closest(OUR_ENTRY_SELECTOR) !== null) return;
+		if (target.closest(OUR_VIEW_SELECTOR) !== null) return;
+		controller.close();
 	};
-	document.addEventListener("click", onClickSidebarRow, true);
+	document.addEventListener("click", onDocumentClick, true);
 	document.addEventListener(ACTIVATE_EVENT, onOtherActivate);
 	const unsubscribe = controller.subscribe(applyActive);
 	applyActive();
 	ensure();
 	return () => {
-		document.removeEventListener("click", onClickSidebarRow, true);
+		document.removeEventListener("click", onDocumentClick, true);
 		document.removeEventListener(ACTIVATE_EVENT, onOtherActivate);
 		waitObserver.disconnect();
 		unsubscribe();

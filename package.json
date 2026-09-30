@@ -1,7 +1,7 @@
 {
   "name": "dsh-archive-manager",
   "description": "Archive manager for the dsh web GUI: a sidebar entry that lists archived sessions, restores them back to the workspace, and permanently deletes them after confirmation",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
